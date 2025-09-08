@@ -1,0 +1,59 @@
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+*.log
+*.sqlite3
+*.db
+
+# --- Virtual environment ---
+venv/
+.env/
+.venv/
+env/
+ENV/
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- OS files ---
+.DS_Store
+Thumbs.db
+
+# --- Model cache (sentence-transformers, HuggingFace, etc.) ---
+/.cache/
+/transformers/
+/torch_cache/
+/datasets/
+
+# --- Uvicorn / FastAPI ---
+*.pid
+
+# --- Jupyter Notebooks (if you experiment locally) ---
+.ipynb_checkpoints/
+
+# --- Coverage / Test ---
+htmlcov/
+.tox/
+.nox/
+.coverage
+coverage.xml
+.pytest_cache/
+
+
+.env/
+
+a.py
+b.py
+embeddings.py
+main.py
+t.py
+test_api.py
+test_connection.py
+users.csv
+utest.py
