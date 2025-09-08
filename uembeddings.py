@@ -124,7 +124,7 @@ def store_embedding(user_id: int, embedding: np.ndarray):
         if response.data:
             print(f" Semantic embedding stored for user {user_id}")
         else:
-            print(f"⚠ Failed to store embedding for user {user_id}: {response}")
+            print(f"Failed to store embedding for user {user_id}: {response}")
 
     except Exception as e:
         print(f"Error storing embedding for user {user_id}: {e}")
