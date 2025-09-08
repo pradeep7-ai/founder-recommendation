@@ -5,7 +5,7 @@ from sklearn.preprocessing import normalize
 from supabase import create_client, Client
 import os
 from dotenv import load_dotenv
-
+import torch
 # ---------------- Environment ---------------- #
 load_dotenv()
 
@@ -23,7 +23,8 @@ def init_model():
     """Initialize the sentence transformer model"""
     global model
     if model is None:
-        model = SentenceTransformer('all-MiniLM-L6-v2')  # 384-dimensional embeddings
+        torch.set_num_threads(1)  # reduce CPU memory usage
+        model = SentenceTransformer('paraphrase-MiniLM-L3-v2', device='cpu')
         print("Sentence transformer model loaded successfully")
 
 
