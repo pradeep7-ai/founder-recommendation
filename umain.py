@@ -1,6 +1,5 @@
+# umain.py
 import os
-import re
-import numpy as np
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager
@@ -8,10 +7,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
-from sklearn.preprocessing import normalize
-from sentence_transformers import SentenceTransformer
 from supabase import create_client, Client
 from dotenv import load_dotenv
+
+# ---- Import embedding functions from uembeddings.py ---- #
+from uembeddings import generate_embedding_from_userobj, store_embedding
 
 # ---------------- Environment ---------------- #
 load_dotenv()
@@ -23,98 +23,6 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     raise Exception("Missing SUPABASE_URL or SUPABASE_KEY in .env")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# ---------------- Embedding Model ---------------- #
-model = None
-
-def init_model():
-    """Initialize the sentence transformer model"""
-    global model
-    if model is None:
-        model = SentenceTransformer("all-MiniLM-L6-v2")  # 384-d embeddings
-        print("Sentence transformer model loaded successfully")
-
-
-def clean_text(text: str) -> str:
-    """Basic cleaning for embeddings"""
-    if text is None:
-        return ""
-    text = str(text)
-    text = re.sub(r"[^\w\s,.-]", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def generate_embedding_from_userobj(user_dict: dict) -> np.ndarray:
-    """Generate a weighted semantic embedding from user profile"""
-    global model
-    if model is None:
-        init_model()
-
-    weights = {
-        "industry": 0.25,
-        "skills": 0.20,
-        "vision": 0.20,
-        "role_stage": 0.18,
-        "experience": 0.07,
-        "education": 0.05,
-        "funding": 0.03,
-        "location": 0.02,
-    }
-
-    def get_weighted_embedding(text, weight):
-        text = clean_text(text)
-        if not text or text == "UNKNOWN":
-            return np.zeros(384) * weight
-        emb = model.encode(text, convert_to_numpy=True)
-        return emb * weight
-
-    industry_emb = get_weighted_embedding(user_dict.get("industry", ""), weights["industry"])
-    skills_emb = get_weighted_embedding(user_dict.get("skills", ""), weights["skills"])
-    vision_emb = get_weighted_embedding(user_dict.get("vision_statement", ""), weights["vision"])
-
-    role_stage_text = f"{user_dict.get('role', '')} {user_dict.get('stage', '')}"
-    role_stage_emb = get_weighted_embedding(role_stage_text, weights["role_stage"])
-
-    education_emb = get_weighted_embedding(user_dict.get("education_background", ""), weights["education"])
-    location_emb = get_weighted_embedding(user_dict.get("location", ""), weights["location"])
-
-    # Numeric features
-    years_exp = user_dict.get("years_experience", 0)
-    funding = user_dict.get("funding_amount", 0)
-
-    years_norm = np.tanh(years_exp / 20.0) * weights["experience"] if years_exp > 0 else 0
-    funding_norm = np.tanh(funding / 1_000_000.0) * weights["funding"] if funding > 0 else 0
-    numeric_features = np.array([years_norm, funding_norm])
-
-    final_emb = np.concatenate([
-        industry_emb,
-        skills_emb,
-        vision_emb,
-        role_stage_emb,
-        education_emb,
-        location_emb,
-        numeric_features,
-    ])
-
-    final_emb = normalize(final_emb.reshape(1, -1))[0]
-
-    if final_emb.shape[0] != 2306:
-        raise ValueError(f"Embedding dimension mismatch: expected 2306, got {final_emb.shape[0]}")
-
-    return final_emb
-
-
-def store_embedding(user_id: int, embedding: np.ndarray):
-    """Store or update embedding in Supabase"""
-    embedding_list = embedding.tolist()
-    response = supabase.table("embeddings").upsert({
-        "user_id": user_id,
-        "embedding": embedding_list,
-    }).execute()
-
-    if not response.data:
-        raise RuntimeError(f"Failed to store embedding for user {user_id}")
-    print(f"Stored embedding for user {user_id}")
 
 # ---------------- FastAPI Models ---------------- #
 class UserCreate(BaseModel):
@@ -189,6 +97,7 @@ async def generate_and_store_embedding(user_id: int, user_data: UserCreate):
         print(f"Embedding generation failed for user {user_id}: {e}")
 
 
+
 async def embedding_exists(user_id: int) -> bool:
     response = supabase.table("embeddings").select("user_id").eq("user_id", user_id).execute()
     return bool(response.data)
@@ -219,10 +128,24 @@ async def generate_missing_embeddings():
         except Exception as e:
             print(f"Failed to process user {user['id']}: {e}")
 
+
+async def regenerate_all_embeddings():
+    users = supabase.table("users").select("*").execute().data or []
+
+    print(f"⚡ Regenerating embeddings for {len(users)} users")
+
+    for user in users:
+        try:
+            emb = generate_embedding_from_userobj(user)
+            store_embedding(user["id"], emb)
+            print(f"Regenerated embedding for user {user['id']} - {user['name']}")
+        except Exception as e:
+            print(f"Failed to process user {user['id']}: {e}")
+
+
 # ---------------- FastAPI App ---------------- #
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_model()
     print("Embedding system ready")
     try:
         await generate_missing_embeddings()
@@ -247,8 +170,14 @@ async def create_user_endpoint(user_data: UserCreate, background_tasks: Backgrou
     user = await get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=500, detail="Failed to fetch created user")
+    
     background_tasks.add_task(generate_and_store_embedding, user_id, user_data)
     return user
+
+@app.post("/admin/regenerate-all-embeddings")
+async def admin_regenerate_all_embeddings():
+    await regenerate_all_embeddings()
+    return {"message": "Embeddings regenerated for all users"}
 
 
 @app.get("/users/{user_id}", response_model=UserResponse)
