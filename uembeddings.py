@@ -20,6 +20,8 @@ if not SUPABASE_URL or not SUPABASE_KEY or not OPENAI_API_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+TARGET_DIM = 2306  # your Supabase schema expects this
+
 # ---------------- Text Cleaning ---------------- #
 def clean_text(text: str) -> str:
     """Clean text for embedding"""
@@ -36,7 +38,7 @@ def generate_embedding_from_userobj(user_dict: dict) -> np.ndarray:
     def get_embedding(text: str) -> np.ndarray:
         text = clean_text(text)
         if not text or text == "UNKNOWN":
-            return np.zeros(1536, dtype=np.float32)  # OpenAI text-embedding-3-small dim
+            return np.zeros(1536, dtype=np.float32)
         response = client.embeddings.create(
             model="text-embedding-3-small",
             input=text
@@ -69,26 +71,47 @@ def generate_embedding_from_userobj(user_dict: dict) -> np.ndarray:
     # Normalize
     final_emb = normalize(final_emb.reshape(1, -1))[0]
 
-    # 5. Truncate to first 2306 dimensions
-    truncated_emb = final_emb[:2306]
+    # 5. Truncate to first TARGET_DIM dimensions (to match existing schema)
+    if len(final_emb) < TARGET_DIM:
+        # pad if shorter (unlikely with 1536+1536+2=3074) — but keep defensive
+        final_emb = np.pad(final_emb, (0, TARGET_DIM - len(final_emb)), "constant")
+    else:
+        final_emb = final_emb[:TARGET_DIM]
 
-    print(f"Generated semantic embedding with dimension: {truncated_emb.shape[0]}")
-    return truncated_emb
+    print(f"Generated semantic embedding with dimension: {final_emb.shape[0]}")
+    return final_emb
 
 # ---------------- Supabase Functions ---------------- #
-def store_embedding(user_id: int, embedding: np.ndarray):
-    """Store or update embedding in Supabase"""
+def convert_embedding_to_list(embedding: np.ndarray) -> list:
+    """Convert numpy embedding into list for Supabase storage"""
+    return embedding.tolist()
+
+def store_embedding(user_email: str, embedding: np.ndarray):
+    """Store or update embedding in Supabase using user_id as FK"""
     try:
-        embedding_list = embedding.tolist()
+        # Step 1: Get user_id from users table
+        user_response = supabase.table("users").select("id").eq("email", user_email).single().execute()
+        if not user_response.data:
+            raise ValueError(f"No user found with email {user_email}")
+
+        user_id = user_response.data["id"]
+
+        # Step 2: Convert embedding to list
+        embedding_list = convert_embedding_to_list(embedding)
+
+        # Step 3: Upsert into embeddings table
         response = supabase.table("embeddings").upsert({
             "user_id": user_id,
+            "email": user_email,
             "embedding": embedding_list
         }).execute()
 
         if response.data:
-            print(f"Semantic embedding stored for user {user_id}")
+            print(f" Semantic embedding stored for user {user_email} (user_id={user_id})")
         else:
-            print(f"Embedding upsert executed for user {user_id} (no return data)")
+            print(f"ℹEmbedding upsert executed for user {user_email} (no return data)")
+
     except Exception as e:
-        print(f"Error storing embedding for user {user_id}: {e}")
+        print(f" Error storing embedding for user {user_email}: {e}")
         raise
+
